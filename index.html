@@ -350,17 +350,17 @@ var SUPABASE_KEY = "sb_publishable_N_2c4lr4Fwe9GhuXuTCnlg_p58XTN4R";
 var sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 var MONTH_ORDER = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-var SPEND_CATEGORIES = ["Family contribution", "Capital One (no detail)", "Travel", "Shopping", "Gas", "Subscriptions", "Car", "Groceries", "Bank fees", "Parking", "Gaming", "Transit"];
+var SPEND_CATEGORIES = ["Family contribution", "Capital One (no detail)", "Travel", "Money to friends", "Shopping", "Gas", "Subscriptions", "Car", "Groceries", "Bank fees", "Parking", "Gaming", "Transit"];
 var INCOME_CATEGORIES = ["Money from friends", "Family reimbursement"];
 var ALL_CATEGORIES = INCOME_CATEGORIES.concat(SPEND_CATEGORIES).concat(["Transfers"]);
 var CATEGORY_COLORS = {
   "Family contribution": "#d777a2", "Capital One (no detail)": "#a08356", "Travel": "#6f95c4",
   "Shopping": "#e0885a", "Gas": "#d9a44a", "Subscriptions": "#8b6bb0", "Car": "#708090",
   "Groceries": "#7fae7f", "Bank fees": "#c46f6f", "Parking": "#9aa65a", "Gaming": "#b06fb0",
-  "Transit": "#5f9ea0", "Money from friends": "#2f6f4e", "Family reimbursement": "#3c6c8a", "Transfers": "#a3a3a3"
+  "Transit": "#5f9ea0", "Money to friends": "#c9748f", "Money from friends": "#2f6f4e", "Family reimbursement": "#3c6c8a", "Transfers": "#a3a3a3"
 };
 
-var STATE = { bills: [], members: [], shareMode: "income", customShares: {}, goals: {}, budgets: {}, contributions: {}, txns: [] };
+var STATE = { bills: [], members: [], shareMode: "income", customShares: {}, goals: {}, budgets: {}, goalsByOwner: {}, budgetsByOwner: {}, contributions: {}, txns: [] };
 var PROFILE = null;
 var currentMonth = null, txnMonth = "all", txnSort = { col: "date", dir: -1 };
 var donutChart = null, mvmChart = null, trendChart = null;
@@ -387,11 +387,25 @@ function toast(msg) {
 // ---------- data access ----------
 function months() {
   var seen = {}, out = [];
-  STATE.txns.forEach(function (t) { seen[t.month] = true; });
+  STATE.txns.forEach(function (t) { if (t.owner === PROFILE) seen[t.month] = true; });
   MONTH_ORDER.forEach(function (m) { if (seen[m]) out.push(m); });
   return out;
 }
-function monthTxns(m) { return STATE.txns.filter(function (t) { return t.month === m; }); }
+function monthTxns(m) { return STATE.txns.filter(function (t) { return t.month === m && t.owner === PROFILE; }); }
+function profileName() {
+  var me = STATE.members.filter(function (m) { return m.key === PROFILE; })[0];
+  return me ? me.name.split(" ")[0] : "you";
+}
+function myGoals() {
+  return STATE.goalsByOwner[PROFILE] || (PROFILE === "rumi" ? STATE.goals : null) || null;
+}
+function myBudgets() {
+  if (!STATE.budgetsByOwner[PROFILE]) {
+    var seed = STATE.budgetsByOwner["rumi"] || STATE.budgets || {};
+    STATE.budgetsByOwner[PROFILE] = JSON.parse(JSON.stringify(seed));
+  }
+  return STATE.budgetsByOwner[PROFILE];
+}
 function incomeTotal(m) {
   var s = 0;
   monthTxns(m).forEach(function (t) { if (t.amount > 0 && t.category !== "Transfers") s += t.amount; });
@@ -419,7 +433,9 @@ function savingsFor(m) {
 }
 function familyPaidByRumi(m) {
   var s = 0;
-  monthTxns(m).forEach(function (t) { if (t.category === "Family contribution" && t.amount < 0) s += -t.amount; });
+  STATE.txns.forEach(function (t) {
+    if (t.owner === "rumi" && t.month === m && t.category === "Family contribution" && t.amount < 0) s += -t.amount;
+  });
   return s;
 }
 function familyTotals() {
@@ -505,12 +521,14 @@ function loadAll() {
       else if (row.key === "custom-shares") STATE.customShares = row.value;
       else if (row.key === "goals") STATE.goals = row.value;
       else if (row.key === "budgets") STATE.budgets = row.value;
+      else if (row.key.indexOf("goals:") === 0) STATE.goalsByOwner[row.key.slice(6)] = row.value;
+      else if (row.key.indexOf("budgets:") === 0) STATE.budgetsByOwner[row.key.slice(8)] = row.value;
       else if (row.key.indexOf("contributions:") === 0) STATE.contributions[row.key] = row.value;
     });
     STATE.txns = txnRes.data.map(function (r) {
       return { id: r.id, year: r.year, month: r.month, date: r.date, rawDescription: r.raw_description,
         displayDescription: r.display_description, amount: parseFloat(r.amount), category: r.category,
-        account: r.account, status: r.status || "" };
+        account: r.account, status: r.status || "", owner: r.owner || "rumi" };
     });
     if (STATE.txns.length) YEAR = STATE.txns[0].year;
     var ms = months();
@@ -563,8 +581,10 @@ function renderKPI() {
   document.getElementById("kpi-transfer").textContent = fmtMoney(0);
 }
 function renderGoalsCaption() {
-  var g = STATE.goals || {};
-  document.getElementById("goals-caption").innerHTML = "Goals: Tax " + (g.taxPct || 0) + "% &middot; Tithe " + (g.tithePct || 0) + "% &middot; Savings " + (g.savingsPct || 0) + "%";
+  var g = myGoals();
+  document.getElementById("goals-caption").innerHTML = g
+    ? "Goals: Tax " + (g.taxPct || 0) + "% &middot; Tithe " + (g.tithePct || 0) + "% &middot; Savings " + (g.savingsPct || 0) + "%"
+    : "No goals set for " + esc(profileName()) + " yet";
 }
 function renderDonut() {
   var byCat = spendingByCategory(currentMonth);
@@ -591,7 +611,11 @@ function renderDonut() {
   });
 }
 function renderTransfers() {
-  var g = STATE.goals || {};
+  var g = myGoals();
+  if (!g) {
+    document.getElementById("transfers-list").innerHTML = '<div class="empty-state">No money goals set for ' + esc(profileName()) + ' yet. Ask Rumi to add them for you.</div>';
+    return;
+  }
   var base = g.monthlyTakeHome || 0;
   var tax = base * ((g.taxPct || 0) / 100);
   var tithe = (base - tax) * ((g.tithePct || 0) / 100);
@@ -624,6 +648,11 @@ function renderSavingsTracker() {
 }
 function calloutHTML(kind, text) { return '<div class="callout ' + kind + '">' + text + '</div>'; }
 function renderOverviewInsights() {
+  if (!months().length) {
+    document.getElementById("overview-insights-title").textContent = "Insights";
+    document.getElementById("overview-insights").innerHTML = calloutHTML("note", "No statements for " + esc(profileName()) + " yet. Upload one on the Statements tab &mdash; it gets processed into the dashboard with the next monthly update.");
+    return;
+  }
   document.getElementById("overview-insights-title").textContent = "Insights for " + currentMonth;
   var inc = incomeTotal(currentMonth), sp = spentTotal(currentMonth), net = inc - sp;
   var byCat = spendingByCategory(currentMonth);
@@ -655,6 +684,7 @@ function visibleTxns() {
   var search = (document.getElementById("txn-search").value || "").toLowerCase();
   var statusFilter = document.getElementById("txn-status-filter").value;
   var rows = STATE.txns.filter(function (t) {
+    if (t.owner !== PROFILE) return false;
     if (txnMonth !== "all" && t.month !== txnMonth) return false;
     if (search && t.displayDescription.toLowerCase().indexOf(search) === -1 && t.rawDescription.toLowerCase().indexOf(search) === -1) return false;
     if (statusFilter === "blank" && t.status !== "") return false;
@@ -995,8 +1025,9 @@ function renderBudgetTable() {
   var html = "<tr><th>Category</th><th>Budget/mo</th>";
   ms.forEach(function (m) { html += "<th>" + m + "</th>"; });
   html += "<th>Avg</th><th>Status</th></tr>";
+  var budgets = myBudgets();
   SPEND_CATEGORIES.forEach(function (cat) {
-    var budget = parseFloat(STATE.budgets[cat]) || 0;
+    var budget = parseFloat(budgets[cat]) || 0;
     var vals = ms.map(function (m) { return spendingByCategory(m)[cat] || 0; });
     var avg = vals.reduce(function (a, b) { return a + b; }, 0) / (ms.length || 1);
     var ratio = budget > 0 ? avg / budget : (avg > 0 ? 999 : 0);
@@ -1019,8 +1050,9 @@ function renderBudgetTable() {
   document.getElementById("tile-over").textContent = over;
   table.querySelectorAll("input.budget-input").forEach(function (inp) {
     inp.addEventListener("change", function () {
-      STATE.budgets[inp.getAttribute("data-cat")] = parseFloat(inp.value) || 0;
-      saveState("budgets", STATE.budgets); renderBudgetTable();
+      var b = myBudgets();
+      b[inp.getAttribute("data-cat")] = parseFloat(inp.value) || 0;
+      saveState("budgets:" + PROFILE, b); renderBudgetTable();
     });
   });
 }
@@ -1030,13 +1062,17 @@ function renderInsights() {
   var html = "";
   var totalNet = 0;
   ms.forEach(function (m) { totalNet += incomeTotal(m) - spentTotal(m); });
-  html += '<div class="insight-subheader">Big picture &mdash; ' + ms.length + ' month' + (ms.length === 1 ? "" : "s") + ' tracked</div>';
-  html += calloutHTML("note", "Checking flows net " + fmtMoney(totalNet) + " so far. Paychecks land elsewhere, so this is the spending story, not the whole story.");
-  var g = STATE.goals || {};
-  if (g.monthlyTakeHome) {
+  html += '<div class="insight-subheader">Big picture &mdash; ' + esc(profileName()) + ', ' + ms.length + ' month' + (ms.length === 1 ? "" : "s") + ' tracked</div>';
+  if (!ms.length) {
+    html += calloutHTML("note", "No statements for " + esc(profileName()) + " yet. Upload one on the Statements tab to start your own money story.");
+  } else {
+    html += calloutHTML("note", "Your accounts net " + fmtMoney(totalNet) + " so far in tracked flows.");
+  }
+  var g = myGoals();
+  if (g && g.monthlyTakeHome) {
     var tithe = g.monthlyTakeHome * (g.tithePct || 0) / 100;
     var save = (g.monthlyTakeHome - tithe) * (g.savingsPct || 0) / 100;
-    html += calloutHTML("good", "Rumi's plan: give " + fmtMoney(tithe) + ", save " + fmtMoney(save) + ", live on " + fmtMoney(g.monthlyTakeHome - tithe - save) + " each month.");
+    html += calloutHTML("good", esc(profileName()) + "'s plan: give " + fmtMoney(tithe) + ", save " + fmtMoney(save) + ", live on " + fmtMoney(g.monthlyTakeHome - tithe - save) + " each month.");
   }
   html += '<div class="insight-subheader">Family</div>';
   var t = familyTotals();
@@ -1084,6 +1120,9 @@ function wireTabs() {
   });
 }
 function renderAll() {
+  var ms = months();
+  if (!ms.length) currentMonth = null;
+  else if (ms.indexOf(currentMonth) === -1) currentMonth = ms[ms.length - 1];
   var fns = [renderGoalsCaption, renderOverviewMonths, renderKPI, renderDonut, renderTransfers,
     renderSavingsTracker, renderOverviewInsights, renderTxnMonthPills, renderTxnTable,
     renderFamily, renderMonthVsMonth, renderCategoryTrend, renderBudgetTable, renderInsights, renderProfilePills];
