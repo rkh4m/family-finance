@@ -292,7 +292,7 @@
         <div class="savings-note">Files are stored per person: statements / rumi / daler / parvina. PDFs and CSVs accepted. Select multiple files at once (ctrl/cmd-click or shift-click in the file picker) to upload them together.</div>
       </div>
       <div class="card">
-        <div class="card-header-row"><h3>Everyone's Statements</h3><span class="card-caption">Click a file to download</span></div>
+        <div class="card-header-row"><h3>Your Statements</h3><span class="card-caption">Private to you &middot; click a file to download</span></div>
         <div id="stmt-lists"></div>
       </div>
     </div>
@@ -947,37 +947,33 @@ function renderFamily() {
 function renderStatements() {
   var wrap = document.getElementById("stmt-lists");
   wrap.innerHTML = "<div class='empty-state'>Loading files...</div>";
-  var users = STATE.members.map(function (m) { return { key: m.key, name: m.name }; });
-  Promise.all(users.map(function (u) {
-    return sb.storage.from("statements").list(u.key, { limit: 100, sortBy: { column: "name", order: "desc" } })
-      .then(function (res) { return { user: u, files: (res.data || []).filter(function (f) { return f.name !== ".keep"; }) }; });
-  })).then(function (lists) {
-    wrap.innerHTML = "";
-    lists.forEach(function (entry) {
+  sb.storage.from("statements").list(PROFILE, { limit: 100, sortBy: { column: "name", order: "desc" } })
+    .then(function (res) {
+      var files = (res.data || []).filter(function (f) { return f.name !== ".keep"; });
+      wrap.innerHTML = "";
       var div = document.createElement("div");
       div.className = "stmt-user";
-      var html = '<div class="u-name">' + esc(entry.user.name) + '</div>';
-      if (!entry.files.length) html += '<div style="color:#8a857a;font-size:13px;">No statements yet.</div>';
+      var html = "";
+      if (!files.length) html += '<div style="color:#8a857a;font-size:13px;">No statements yet. Upload one above.</div>';
       else {
         html += '<ul class="stmt-list">';
-        entry.files.forEach(function (f) {
-          html += '<li><a href="#" data-path="' + esc(entry.user.key + "/" + f.name) + '">' + esc(f.name) + '</a><span style="color:#8a857a;">' + (f.metadata && f.metadata.size ? Math.round(f.metadata.size / 1024) + " KB" : "") + '</span></li>';
+        files.forEach(function (f) {
+          html += '<li><a href="#" data-path="' + esc(PROFILE + "/" + f.name) + '">' + esc(f.name) + '</a><span style="color:#8a857a;">' + (f.metadata && f.metadata.size ? Math.round(f.metadata.size / 1024) + " KB" : "") + '</span></li>';
         });
         html += '</ul>';
       }
       div.innerHTML = html;
       wrap.appendChild(div);
-    });
-    wrap.querySelectorAll("a[data-path]").forEach(function (a) {
-      a.addEventListener("click", function (ev) {
-        ev.preventDefault();
-        sb.storage.from("statements").createSignedUrl(a.getAttribute("data-path"), 3600).then(function (res) {
-          if (res.data && res.data.signedUrl) window.open(res.data.signedUrl, "_blank");
-          else toast("Could not open file");
+      wrap.querySelectorAll("a[data-path]").forEach(function (a) {
+        a.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          sb.storage.from("statements").createSignedUrl(a.getAttribute("data-path"), 3600).then(function (res) {
+            if (res.data && res.data.signedUrl) window.open(res.data.signedUrl, "_blank");
+            else toast("Could not open file");
+          });
         });
       });
-    });
-  }).catch(function (e) { console.error(e); wrap.innerHTML = "<div class='empty-state'>Could not load files.</div>"; });
+    }).catch(function (e) { console.error(e); wrap.innerHTML = "<div class='empty-state'>Could not load files.</div>"; });
 }
 function wireUpload() {
   var btn = document.getElementById("stmt-upload-btn");
