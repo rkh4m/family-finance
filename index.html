@@ -170,8 +170,8 @@
       <div class="subtitle"><span class="live-dot" id="live-dot"></span><span id="subtitle-text">Shared live dashboard &mdash; edits sync for everyone</span></div>
     </div>
     <div class="header-right">
-      <div class="goals-caption" id="goals-caption">Goals: Tax 0% &middot; Tithe 10% &middot; Savings 20%</div>
-      <div class="profile-row" id="profile-row"><span class="who">I am:</span></div>
+      <div class="goals-caption" id="goals-caption"></div>
+      <div class="profile-row" id="profile-row"></div>
     </div>
   </header>
 
@@ -332,11 +332,16 @@
 </div>
 
 <div class="toast" id="toast"></div>
-<div class="overlay" id="profile-overlay" style="display:none;">
+<div class="overlay" id="login-overlay" style="display:none;">
   <div class="box">
-    <h2>Who are you?</h2>
-    <p>Pick your name so contributions and uploads go to the right person. You can switch anytime, top right.</p>
-    <div class="choices" id="profile-choices"></div>
+    <h2>Family sign-in</h2>
+    <p>Enter your email and we'll send you a one-time login link. Family members only.</p>
+    <div class="choices">
+      <input id="login-email" type="email" placeholder="you@gmail.com" autocomplete="email"
+        style="font-size:16px;padding:12px 14px;border-radius:10px;border:1px solid #e6e4dd;font-family:inherit;width:100%;">
+      <button class="btn-primary" id="login-send" style="font-size:16px;padding:13px;">Email me a login link</button>
+    </div>
+    <p id="login-status" style="margin-top:14px;min-height:20px;"></p>
   </div>
 </div>
 
@@ -465,44 +470,45 @@ function saveTxn(id, patch) {
 }
 
 // ---------- profile ----------
-function initProfile() {
-  PROFILE = lsGet("kff:profile", null);
-  renderProfilePills();
-  if (!PROFILE) {
-    var ov = document.getElementById("profile-overlay");
-    var ch = document.getElementById("profile-choices");
-    ch.innerHTML = "";
-    STATE.members.forEach(function (m) {
-      var b = document.createElement("button");
-      b.textContent = m.name;
-      b.addEventListener("click", function () {
-        PROFILE = m.key; lsSet("kff:profile", PROFILE);
-        ov.style.display = "none";
-        renderProfilePills(); renderAll();
-      });
-      ch.appendChild(b);
-    });
-    ov.style.display = "flex";
-  }
-}
-function renderProfilePills() {
+function renderSignedIn() {
   var row = document.getElementById("profile-row");
-  row.querySelectorAll(".pill").forEach(function (p) { p.remove(); });
-  STATE.members.forEach(function (m) {
-    var b = document.createElement("button");
-    b.className = "pill p-" + m.key + (PROFILE === m.key ? " active" : "");
-    b.textContent = m.name.split(" ")[0];
-    b.addEventListener("click", function () {
-      PROFILE = m.key; lsSet("kff:profile", PROFILE);
-      renderProfilePills(); renderAll();
-    });
-    row.appendChild(b);
+  row.innerHTML = "";
+  if (!PROFILE) return;
+  var me = STATE.members.filter(function (m) { return m.key === PROFILE; })[0];
+  var name = me ? me.name : PROFILE;
+  var span = document.createElement("span");
+  span.className = "pill p-" + PROFILE + " active";
+  span.style.cursor = "default";
+  span.textContent = "Signed in: " + name;
+  row.appendChild(span);
+  var out = document.createElement("button");
+  out.className = "pill";
+  out.textContent = "Sign out";
+  out.addEventListener("click", function () {
+    sb.auth.signOut().then(function () { location.reload(); });
   });
+  row.appendChild(out);
   var who = document.getElementById("stmt-upload-who");
-  if (who) {
-    var me = STATE.members.filter(function (m) { return m.key === PROFILE; })[0];
-    who.textContent = me ? me.name.split(" ")[0] : "me";
-  }
+  if (who) who.textContent = me ? me.name.split(" ")[0] : "me";
+}
+function showLogin(msg) {
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("app").style.display = "none";
+  document.getElementById("login-overlay").style.display = "flex";
+  if (msg) document.getElementById("login-status").textContent = msg;
+}
+function wireLogin() {
+  document.getElementById("login-send").addEventListener("click", function () {
+    var email = (document.getElementById("login-email").value || "").trim().toLowerCase();
+    var status = document.getElementById("login-status");
+    if (!email || email.indexOf("@") === -1) { status.textContent = "Type your email first."; return; }
+    status.textContent = "Sending...";
+    sb.auth.signInWithOtp({ email: email, options: { emailRedirectTo: window.location.origin + window.location.pathname } })
+      .then(function (res) {
+        if (res.error) { console.error(res.error); status.textContent = "Could not send: " + res.error.message; }
+        else { status.textContent = "Check your email! Open the link on this device to sign in."; }
+      });
+  });
 }
 
 // ---------- load + realtime ----------
@@ -1125,23 +1131,47 @@ function renderAll() {
   else if (ms.indexOf(currentMonth) === -1) currentMonth = ms[ms.length - 1];
   var fns = [renderGoalsCaption, renderOverviewMonths, renderKPI, renderDonut, renderTransfers,
     renderSavingsTracker, renderOverviewInsights, renderTxnMonthPills, renderTxnTable,
-    renderFamily, renderMonthVsMonth, renderCategoryTrend, renderBudgetTable, renderInsights, renderProfilePills];
+    renderFamily, renderMonthVsMonth, renderCategoryTrend, renderBudgetTable, renderInsights, renderSignedIn];
   fns.forEach(function (fn) {
     try { fn(); } catch (e) { console.error("Render error in " + fn.name + ":", e); }
   });
 }
 (function init() {
   currentMonth = lsGet("kff:overview-month", null);
-  loadAll().then(function () {
-    document.getElementById("loading").style.display = "none";
-    document.getElementById("app").style.display = "";
-    wireTabs(); wireTxnEvents(); wireUpload();
-    initProfile();
-    renderAll();
-    initRealtime();
-  }).catch(function (e) {
-    console.error(e);
-    document.getElementById("loading").textContent = "Could not load data. Check your internet connection and refresh.";
+  wireLogin();
+  var started = false;
+  function start(session) {
+    if (started) return;
+    started = true;
+    var email = (session.user.email || "").toLowerCase();
+    sb.from("member_emails").select("member_key").eq("email", email).maybeSingle().then(function (res) {
+      if (!res.data || !res.data.member_key) {
+        sb.auth.signOut();
+        started = false;
+        showLogin("Sorry, " + email + " is not on the family list.");
+        return;
+      }
+      PROFILE = res.data.member_key;
+      document.getElementById("login-overlay").style.display = "none";
+      document.getElementById("loading").style.display = "";
+      loadAll().then(function () {
+        document.getElementById("loading").style.display = "none";
+        document.getElementById("app").style.display = "";
+        wireTabs(); wireTxnEvents(); wireUpload();
+        renderAll();
+        initRealtime();
+      }).catch(function (e) {
+        console.error(e);
+        document.getElementById("loading").textContent = "Could not load data. Check your internet connection and refresh.";
+      });
+    });
+  }
+  sb.auth.onAuthStateChange(function (_event, session) {
+    if (session) start(session);
+  });
+  sb.auth.getSession().then(function (res) {
+    if (res.data && res.data.session) start(res.data.session);
+    else showLogin("");
   });
 })();
 </script>
