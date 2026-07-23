@@ -285,11 +285,11 @@
       <div class="card">
         <div class="card-header-row"><h3>Upload a Statement</h3><span class="card-caption">Goes into your own folder</span></div>
         <div class="upload-row">
-          <input type="file" id="stmt-file" accept=".pdf,.csv">
+          <input type="file" id="stmt-file" accept=".pdf,.csv" multiple>
           <button class="btn-primary" id="stmt-upload-btn">Upload as <span id="stmt-upload-who">me</span></button>
           <span id="stmt-upload-status" style="color:#8a857a;font-size:13px;"></span>
         </div>
-        <div class="savings-note">Files are stored per person: statements / rumi / daler / parvina. PDFs and CSVs accepted.</div>
+        <div class="savings-note">Files are stored per person: statements / rumi / daler / parvina. PDFs and CSVs accepted. Select multiple files at once (ctrl/cmd-click or shift-click in the file picker) to upload them together.</div>
       </div>
       <div class="card">
         <div class="card-header-row"><h3>Everyone's Statements</h3><span class="card-caption">Click a file to download</span></div>
@@ -980,22 +980,39 @@ function renderStatements() {
   }).catch(function (e) { console.error(e); wrap.innerHTML = "<div class='empty-state'>Could not load files.</div>"; });
 }
 function wireUpload() {
-  document.getElementById("stmt-upload-btn").addEventListener("click", function () {
+  var btn = document.getElementById("stmt-upload-btn");
+  btn.addEventListener("click", function () {
     var fileInput = document.getElementById("stmt-file");
     var status = document.getElementById("stmt-upload-status");
-    var file = fileInput.files && fileInput.files[0];
-    if (!file) { status.textContent = "Pick a file first."; return; }
+    var files = fileInput.files ? Array.prototype.slice.call(fileInput.files) : [];
+    if (!files.length) { status.textContent = "Pick one or more files first."; return; }
     var now = new Date();
     var folder = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
-    var path = PROFILE + "/" + folder + " " + file.name;
-    status.textContent = "Uploading...";
-    sb.storage.from("statements").upload(path, file, { upsert: true }).then(function (res) {
-      if (res.error) { status.textContent = "Upload failed."; console.error(res.error); return; }
-      status.textContent = "Uploaded!";
-      fileInput.value = "";
-      renderStatements();
-      toast("Statement uploaded to " + PROFILE + "'s folder");
-    });
+    btn.disabled = true;
+    var done = 0, failed = [];
+    function uploadNext() {
+      if (done >= files.length) {
+        btn.disabled = false;
+        fileInput.value = "";
+        renderStatements();
+        if (failed.length) {
+          status.textContent = failed.length + " of " + files.length + " failed: " + failed.join(", ");
+        } else {
+          status.textContent = "Uploaded " + files.length + " file" + (files.length === 1 ? "" : "s") + "!";
+          toast(files.length + " statement" + (files.length === 1 ? "" : "s") + " uploaded to " + PROFILE + "'s folder");
+        }
+        return;
+      }
+      var file = files[done];
+      status.textContent = "Uploading " + (done + 1) + " of " + files.length + ": " + file.name + "...";
+      var path = PROFILE + "/" + folder + " " + file.name;
+      sb.storage.from("statements").upload(path, file, { upsert: true }).then(function (res) {
+        if (res.error) { console.error(res.error); failed.push(file.name); }
+        done++;
+        uploadNext();
+      });
+    }
+    uploadNext();
   });
 }
 
