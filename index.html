@@ -268,7 +268,7 @@
           <button class="add-bill-btn" id="add-bill-btn">+ Add a bill</button>
         </div>
         <div class="card">
-          <div class="card-header-row"><h3>Fair Shares</h3><span class="card-caption">Incomes editable &middot; shared with everyone</span></div>
+          <div class="card-header-row"><h3>Contributions</h3><span class="card-caption">Incomes, %, and $ all editable &middot; shared with everyone</span></div>
           <div class="month-pills" id="share-mode-pills" style="margin-bottom:12px;"></div>
           <table class="fam" id="fam-shares-table"></table>
           <div class="savings-note" style="margin-top:14px;" id="fam-savings-note"></div>
@@ -714,7 +714,7 @@ function renderOverviewInsights() {
   var share = memberShare("rumi");
   if (paid > 0 && share > 0) {
     var pct = Math.round(paid / share * 100);
-    html += calloutHTML(pct >= 100 ? "good" : "warn", "Family bills: Rumi sent " + fmtMoney(paid) + " of a " + fmtMoney(share) + " share (" + pct + "%). See the Family tab.");
+    html += calloutHTML(pct >= 100 ? "good" : "warn", "Family bills: Rumi sent " + fmtMoney(paid) + " of a " + fmtMoney(share) + " contribution (" + pct + "%). See the Family tab.");
   }
   if (s.couldCancel === 0 && s.cancelled === 0) html += calloutHTML("yellow", "Nothing marked 'could cancel' yet. Review the Transactions tab and flag any subscriptions you don't need.");
   else if (s.couldCancel > 0) html += calloutHTML("yellow", "Could cancel " + fmtMoney(s.couldCancel) + " this month &mdash; that is " + fmtMoney(s.couldCancel * 12) + "/year.");
@@ -860,19 +860,22 @@ function renderFamily() {
     modeWrap.appendChild(b);
   });
 
-  // shares table (incomes editable too)
+  // contributions table (incomes, %, and $ all editable in custom mode, two-way synced)
   var pcts = getSharePcts();
   var pctSum = STATE.members.reduce(function (s, m) { return s + (pcts[m.key] || 0); }, 0);
-  html = "<tr><th>Person</th><th class='num'>Income/mo</th><th class='num'>Share %</th><th class='num'>Fair Share</th><th class='num'>Left After Share</th></tr>";
+  html = "<tr><th>Person</th><th class='num'>Income/mo</th><th class='num'>%</th><th class='num'>Contribution</th><th class='num'>Left After</th></tr>";
   STATE.members.forEach(function (m) {
     var pct = pcts[m.key] || 0;
     var share = pct / 100 * t.bills;
     var pctCell = STATE.shareMode === "custom"
       ? "<input class='bill-amt share-input' type='number' step='0.1' min='0' max='100' data-member='" + m.key + "' value='" + (Math.round(pct * 10) / 10) + "'>%"
       : pct.toFixed(1) + "%";
+    var contribCell = STATE.shareMode === "custom"
+      ? "<input class='bill-amt contribution-input' type='number' step='0.01' min='0' data-member='" + m.key + "' value='" + share.toFixed(2) + "'>"
+      : "<b>" + fmtMoney(share) + "</b>";
     html += "<tr><td>" + esc(m.name) + (m.key === PROFILE ? " <span class='acct-tag'>you</span>" : "") + "</td>" +
       "<td class='num'><input class='bill-amt income-input' type='number' step='0.01' min='0' data-member='" + m.key + "' value='" + m.income + "'></td>" +
-      "<td class='num'>" + pctCell + "</td><td class='num'><b>" + fmtMoney(share) + "</b></td><td class='num green'>" + fmtMoney(m.income - share) + "</td></tr>";
+      "<td class='num'>" + pctCell + "</td><td class='num'>" + contribCell + "</td><td class='num green'>" + fmtMoney(m.income - share) + "</td></tr>";
   });
   html += "<tr class='total'><td>Household</td><td class='num'>" + fmtMoney(t.income) + "</td><td class='num'>" + pctSum.toFixed(1) + "%</td><td class='num'>" + fmtMoney(pctSum / 100 * t.bills) + "</td><td class='num'>" + fmtMoney(t.income - t.bills) + "</td></tr>";
   var sharesTable = document.getElementById("fam-shares-table");
@@ -880,6 +883,15 @@ function renderFamily() {
   sharesTable.querySelectorAll("input.share-input").forEach(function (inp) {
     inp.addEventListener("change", function () {
       STATE.customShares[inp.getAttribute("data-member")] = parseFloat(inp.value) || 0;
+      saveState("custom-shares", STATE.customShares); renderAll();
+    });
+  });
+  sharesTable.querySelectorAll("input.contribution-input").forEach(function (inp) {
+    inp.addEventListener("change", function () {
+      var totalBills = familyTotals().bills;
+      var dollarVal = parseFloat(inp.value) || 0;
+      var newPct = totalBills > 0 ? (dollarVal / totalBills * 100) : 0;
+      STATE.customShares[inp.getAttribute("data-member")] = newPct;
       saveState("custom-shares", STATE.customShares); renderAll();
     });
   });
@@ -911,7 +923,7 @@ function renderFamily() {
     div.className = "member-block";
     var inner =
       '<div class="m-name">' + esc(m.name) + (m.key === PROFILE ? ' <span class="acct-tag">you</span>' : '') + '</div>' +
-      '<div class="m-meta">Fair share: ' + fmtMoney(share) + ' &middot; Paid: <b>' + fmtMoney(paid) + '</b> (' + Math.round(ratio * 100) + '%)</div>' +
+      '<div class="m-meta">Contribution: ' + fmtMoney(share) + ' &middot; Paid: <b>' + fmtMoney(paid) + '</b> (' + Math.round(ratio * 100) + '%)</div>' +
       '<div class="progress-outer"><div class="progress-inner ' + barClass + '" style="width:' + Math.min(100, Math.round(ratio * 100)) + '%"></div></div>';
     if (m.auto) {
       inner += '<div class="m-paid-row"><span style="color:#8a857a;">Auto-tracked from "Family contribution" transactions in Rumi\'s checking.</span></div>';
