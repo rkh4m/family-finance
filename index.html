@@ -335,11 +335,16 @@
 <div class="overlay" id="login-overlay" style="display:none;">
   <div class="box">
     <h2>Family sign-in</h2>
-    <p>Enter your email and we'll send you a one-time login link. Family members only.</p>
+    <p id="login-subtitle">Enter your email and password. First time here? Just pick a password and we'll set up your account.</p>
     <div class="choices">
       <input id="login-email" type="email" placeholder="you@gmail.com" autocomplete="email"
         style="font-size:16px;padding:12px 14px;border-radius:10px;border:1px solid #e6e4dd;font-family:inherit;width:100%;">
-      <button class="btn-primary" id="login-send" style="font-size:16px;padding:13px;">Email me a login link</button>
+      <input id="login-password" type="password" placeholder="Password" autocomplete="current-password"
+        style="font-size:16px;padding:12px 14px;border-radius:10px;border:1px solid #e6e4dd;font-family:inherit;width:100%;">
+      <button class="btn-primary" id="login-go" style="font-size:16px;padding:13px;">Sign in</button>
+      <button id="login-toggle-mode" style="background:none;border:none;color:#3c6c8a;font-size:13px;cursor:pointer;font-family:inherit;padding:4px;">
+        First time? Create your account instead
+      </button>
     </div>
     <p id="login-status" style="margin-top:14px;min-height:20px;"></p>
   </div>
@@ -497,17 +502,51 @@ function showLogin(msg) {
   document.getElementById("login-overlay").style.display = "flex";
   if (msg) document.getElementById("login-status").textContent = msg;
 }
+var LOGIN_MODE = "signin";
 function wireLogin() {
-  document.getElementById("login-send").addEventListener("click", function () {
+  var toggle = document.getElementById("login-toggle-mode");
+  var subtitle = document.getElementById("login-subtitle");
+  var pwField = document.getElementById("login-password");
+  var goBtn = document.getElementById("login-go");
+  toggle.addEventListener("click", function () {
+    LOGIN_MODE = LOGIN_MODE === "signin" ? "signup" : "signin";
+    if (LOGIN_MODE === "signup") {
+      subtitle.textContent = "Creating your account. Pick any password you'll remember (6+ characters).";
+      pwField.setAttribute("autocomplete", "new-password");
+      goBtn.textContent = "Create account";
+      toggle.textContent = "Already have an account? Sign in instead";
+    } else {
+      subtitle.textContent = "Enter your email and password. First time here? Just pick a password and we'll set up your account.";
+      pwField.setAttribute("autocomplete", "current-password");
+      goBtn.textContent = "Sign in";
+      toggle.textContent = "First time? Create your account instead";
+    }
+    document.getElementById("login-status").textContent = "";
+  });
+  goBtn.addEventListener("click", function () {
     var email = (document.getElementById("login-email").value || "").trim().toLowerCase();
+    var password = pwField.value || "";
     var status = document.getElementById("login-status");
     if (!email || email.indexOf("@") === -1) { status.textContent = "Type your email first."; return; }
-    status.textContent = "Sending...";
-    sb.auth.signInWithOtp({ email: email, options: { emailRedirectTo: window.location.origin + window.location.pathname } })
-      .then(function (res) {
-        if (res.error) { console.error(res.error); status.textContent = "Could not send: " + res.error.message; }
-        else { status.textContent = "Check your email! Open the link on this device to sign in."; }
-      });
+    if (password.length < 6) { status.textContent = "Password needs to be at least 6 characters."; return; }
+    status.textContent = LOGIN_MODE === "signup" ? "Creating account..." : "Signing in...";
+    var call = LOGIN_MODE === "signup"
+      ? sb.auth.signUp({ email: email, password: password })
+      : sb.auth.signInWithPassword({ email: email, password: password });
+    call.then(function (res) {
+      if (res.error) {
+        console.error(res.error);
+        status.textContent = res.error.message.indexOf("already registered") !== -1
+          ? "That email already has an account. Switch to Sign in."
+          : "Error: " + res.error.message;
+        return;
+      }
+      if (!res.data.session) {
+        status.textContent = "Account created, but no session started. Try signing in.";
+        return;
+      }
+      status.textContent = "";
+    });
   });
 }
 
